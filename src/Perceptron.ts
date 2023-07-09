@@ -21,7 +21,7 @@ enum Regularization {
 
 import Matrix from "./Matrix";
 
-class NeuralNetwork {
+class Perceptron {
     layers: Matrix[];
     weights: Matrix[];
     biases: Matrix[];
@@ -47,13 +47,26 @@ class NeuralNetwork {
     minLoss: number;
     epochsWithoutImprovement: number;
 
-    constructor(layerSizes: number[], activationFunction: ActivationFunction = ActivationFunction.Sigmoid,
-                learningRate: number = 0.1, momentum: number = 0.9, batchSize: number = 1,
-                initialization: Initialization = Initialization.Random, regularization: Regularization = Regularization.None,
-                regularizationRate: number = 0.01, dropoutRate: number = 0.5, epochs: number = 100, 
-                earlyStopPatience: number = 10, weightLearningRate: number = 0.5, 
-                biasLearningRate: number = 0.5)
-    {
+    bnGammas: Matrix[];
+    bnBetas: Matrix[];
+    bnGammaVelocity: Matrix[];
+    bnBetaVelocity: Matrix[];
+
+    constructor(
+        layerSizes: number[],
+        activationFunction: ActivationFunction = ActivationFunction.Sigmoid,
+        learningRate: number = 0.1,
+        momentum: number = 0.9,
+        batchSize: number = 1,
+        initialization: Initialization = Initialization.Random,
+        regularization: Regularization = Regularization.None,
+        regularizationRate: number = 0.01,
+        dropoutRate: number = 0.5,
+        epochs: number = 100, 
+        earlyStopPatience: number = 10,
+        weightLearningRate: number = 0.5, 
+        biasLearningRate: number = 0.5
+    ) {
         this.layers = layerSizes.map(size => new Matrix(size, 1));
 
         this.weights = layerSizes.slice(1).map((size, i) => {
@@ -88,6 +101,11 @@ class NeuralNetwork {
         this.biasLearningRate = biasLearningRate;
         this.minLoss = Infinity;
         this.epochsWithoutImprovement = 0;
+
+        this.bnGammas = layerSizes.slice(1).map(size => new Matrix(size, 1).fill(1)); // Initialize gamma to 1
+        this.bnBetas = layerSizes.slice(1).map(size => new Matrix(size, 1).fill(0)); // Initialize beta to 0
+        this.bnGammaVelocity = this.bnGammas.map(gamma => new Matrix(gamma.rows, gamma.cols));
+        this.bnBetaVelocity = this.bnBetas.map(beta => new Matrix(beta.rows, beta.cols));
     }
 
     setValidationData(data: number[][], labels: number[]): void {
@@ -104,12 +122,31 @@ class NeuralNetwork {
         return totalLoss / data.length;
     }
 
+    // predict(inputArray: number[]): number {
+    //     this.layers[0] = Matrix.fromArray(inputArray);
+    //     for (let i = 1; i < this.layers.length; i++) {
+    //         this.layers[i] = Matrix.add(Matrix.dotProduct(this.weights[i-1], this.layers[i-1]), this.biases[i-1]).map(this.activationFunc);
+    //     }
+    //     return this.layers[this.layers.length-1].toArray()[0];
+    // }
+
     predict(inputArray: number[]): number {
         this.layers[0] = Matrix.fromArray(inputArray);
         for (let i = 1; i < this.layers.length; i++) {
-            this.layers[i] = Matrix.add(Matrix.dotProduct(this.weights[i-1], this.layers[i-1]), this.biases[i-1]).map(this.activationFunc);
+            this.layers[i] = Matrix.add(
+                Matrix.dotProduct(this.weights[i - 1], this.layers[i - 1]),
+                this.biases[i - 1]
+            );
+
+            this.layers[i] = this.normalizeBatch(
+                this.layers[i],
+                this.bnGammas[i - 1],
+                this.bnBetas[i - 1]
+            );
+
+            this.layers[i] = this.layers[i].map(this.activationFunc);
         }
-        return this.layers[this.layers.length-1].toArray()[0];
+        return this.layers[this.layers.length - 1].toArray()[0];
     }
 
     train(trainingData: number[][], trainingLabels: number[], batchSize: number = 1): void {
@@ -140,25 +177,56 @@ class NeuralNetwork {
     }
     
 
+    // backpropagate(inputArray: number[], targetArray: number[]): void {
+    //     this.predict(inputArray);
+    
+    //     for (let i = this.layers.length-2; i >= 0; i--) {
+    //         const targetMatrix = Matrix.fromArray(targetArray);
+    //         const outputLayer = this.layers[this.layers.length - 1];
+            
+    //         console.log("Target Matrix dimensions:", targetMatrix.rows, targetMatrix.cols);
+    //         console.log("Output Layer dimensions:", outputLayer.rows, outputLayer.cols);
+
+    //         const reshapedTargetMatrix = targetMatrix.reshape(outputLayer.rows, outputLayer.cols);
+    //         let outputErrors = Matrix.subtract(reshapedTargetMatrix, outputLayer);
+    
+    //         let gradients = Matrix.map(this.layers[i+1], this.activationFuncDerivative);
+    //         gradients.multiply(outputErrors);
+    //         gradients.multiply(this.learningRate);
+    
+    //         let weightDeltas = Matrix.multiply(gradients, Matrix.transpose(this.layers[i]));
+    
+    //         this.weights[i].add(weightDeltas);
+    //         this.biases[i].add(gradients);
+    
+    //         outputErrors = Matrix.multiply(Matrix.transpose(this.weights[i]), outputErrors);
+    //     }
+    // }
+
     backpropagate(inputArray: number[], targetArray: number[]): void {
         this.predict(inputArray);
-    
-        for (let i = this.layers.length-2; i >= 0; i--) {
-            let outputErrors = Matrix.subtract(Matrix.fromArray(targetArray), this.layers[this.layers.length-1]);
-    
-            let gradients = Matrix.map(this.layers[i+1], this.activationFuncDerivative);
-            gradients.multiply(outputErrors);
-            gradients.multiply(this.learningRate);
-    
-            let weightDeltas = Matrix.multiply(gradients, Matrix.transpose(this.layers[i]));
-    
-            this.weights[i].add(weightDeltas);
-            this.biases[i].add(gradients);
-    
-            outputErrors = Matrix.multiply(Matrix.transpose(this.weights[i]), outputErrors);
+      
+        let target = Matrix.fromArray(targetArray); // Convert targetArray to matrix
+        const output = this.layers[this.layers.length - 1];
+      
+        target = target.reshape(output.rows, output.cols);
+
+        const outputErrors = Matrix.subtract(target, output);
+      
+        for (let i = this.layers.length - 2; i >= 0; i--) {
+          const gradients = Matrix.map(this.layers[i + 1], this.activationFuncDerivative);
+          gradients.multiply(outputErrors);
+          gradients.multiply(this.learningRate);
+      
+          const weightDeltas = Matrix.multiply(gradients, Matrix.transpose(this.layers[i]));
+      
+          this.weights[i].add(weightDeltas);
+          this.biases[i].add(gradients);
+      
+          const transposedWeights = Matrix.transpose(this.weights[i]);
+          outputErrors.setData(Matrix.multiply(transposedWeights, outputErrors).data); // Update the outputErrors with new values
         }
-    }
-    
+      }
 
     updateWeightsAndBiases(): void {
         for (let i = 0; i < this.weights.length; i++) {
@@ -239,7 +307,22 @@ class NeuralNetwork {
         let error = prediction - label;
         return error * error;
     }
-    
+
+    normalizeBatch(layer: Matrix, gamma: Matrix, beta: Matrix): Matrix {
+        const epsilon = 1e-10;
+        const mean = layer.mean();
+        const variance = layer.variance();
+
+        const normalizedLayer = layer.clone();
+        for (let i = 0; i < normalizedLayer.rows; i++) {
+            for (let j = 0; j < normalizedLayer.cols; j++) {
+                normalizedLayer.data[i][j] = (normalizedLayer.data[i][j] - mean) / Math.sqrt(variance + epsilon);
+                normalizedLayer.data[i][j] = gamma.data[i][j] * normalizedLayer.data[i][j] + beta.data[i][j];
+            }
+        }
+
+        return normalizedLayer;
+    }
 }
 
-export default NeuralNetwork;
+export default Perceptron;

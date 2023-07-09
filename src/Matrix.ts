@@ -213,7 +213,66 @@ class Matrix {
         }
 
         return result;
-    }    
+    }
+    
+    fill(value: number): Matrix {
+        for (let i = 0; i < this.rows; i++) {
+            for (let j = 0; j < this.cols; j++) {
+                this.data[i][j] = value;
+            }
+        }
+        return this;
+    }
+
+    clone(): Matrix {
+        const clonedMatrix = new Matrix(this.rows, this.cols);
+        for (let i = 0; i < this.rows; i++) {
+            clonedMatrix.data[i] = [...this.data[i]];
+        }
+
+        return clonedMatrix;
+    }
+    
+    mean(): number {
+        let sum = 0;
+        for (let i = 0; i < this.rows; i++) {
+            for (let j = 0; j < this.cols; j++) {
+                sum += this.data[i][j];
+            }
+        }
+        return sum / (this.rows * this.cols);
+    }
+    
+    variance(): number {
+        const mean = this.mean();
+        let sum = 0;
+        for (let i = 0; i < this.rows; i++) {
+            for (let j = 0; j < this.cols; j++) {
+                const diff = this.data[i][j] - mean;
+                sum += diff * diff;
+            }
+        }
+        return sum / (this.rows * this.cols);
+    }
+
+    reshape(rows: number, cols: number): Matrix {
+        const data: number[][] = [];
+      
+        for (let i = 0; i < rows; i++) {
+          const row: number[] = [];
+          for (let j = 0; j < cols; j++) {
+            const dataIndex = i * cols + j;
+            row.push(this.data[Math.floor(dataIndex / this.cols)][dataIndex % this.cols]);
+          }
+          data.push(row);
+        }
+      
+        this.rows = rows;
+        this.cols = cols;
+        this.data = data;
+      
+        return this;
+      }
 }
 
 export default Matrix
